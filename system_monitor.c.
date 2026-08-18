@@ -1,0 +1,801 @@
+/*
+ * Linux System Resource Monitor and Process Manager
+ *
+ * Features:
+ * 1. CPU utilization
+ * 2. Memory utilization
+ * 3. Disk utilization
+ * 4. System uptime
+ * 5. Running process listing
+ * 6. Process information
+ * 7. Process termination
+ * 8. Continuous monitoring
+ *
+ * Compile:
+ *     gcc -Wall -Wextra -O2 system_monitor.c -o system_monitor
+ *
+ * Run:
+ *     ./system_monitor
+ *
+ * Linux-specific:
+ *     /proc filesystem
+ *     POSIX system calls
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <dirent.h>
+#include <signal.h>
+#include <sys/statvfs.h>
+#include <sys/types.h>
+#include <ctype.h>
+#include <time.h>
+#include <errno.h>
+
+#define BUFFER_SIZE 1024
+#define PROC_PATH "/proc"
+
+/* ---------------------------------------------------------
+   Utility Functions
+   --------------------------------------------------------- */
+
+/* Check whether a string contains only digits */
+int isNumeric(const char *str)
+{
+    if (str == NULL || *str == '\0')
+        return 0;
+
+    while (*str)
+    {
+        if (!isdigit((unsigned char)*str))
+            return 0;
+
+        str++;
+    }
+
+    return 1;
+}
+
+/* Clear terminal screen */
+void clearScreen()
+{
+    printf("\033[2J\033[H");
+}
+
+/* Pause until user presses Enter */
+void pauseScreen()
+{
+    printf("\nPress ENTER to continue...");
+    getchar();
+}
+
+/* ---------------------------------------------------------
+   CPU INFORMATION
+   --------------------------------------------------------- */
+
+void getCPUUsage()
+{
+    FILE *file;
+    char line[BUFFER_SIZE];
+
+    unsigned long long user1, nice1, system1;
+    unsigned long long idle1, iowait1;
+    unsigned long long irq1, softirq1, steal1;
+
+    unsigned long long user2, nice2, system2;
+    unsigned long long idle2, iowait2;
+    unsigned long long irq2, softirq2, steal2;
+
+    file = fopen("/proc/stat", "r");
+
+    if (file == NULL)
+    {
+        perror("Unable to open /proc/stat");
+        return;
+    }
+
+    if (fgets(line, sizeof(line), file) == NULL)
+    {
+        fclose(file);
+        return;
+    }
+
+    sscanf(line,
+           "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+           &user1,
+           &nice1,
+           &system1,
+           &idle1,
+           &iowait1,
+           &irq1,
+           &softirq1,
+           &steal1);
+
+    fclose(file);
+
+    sleep(1);
+
+    file = fopen("/proc/stat", "r");
+
+    if (file == NULL)
+    {
+        perror("Unable to open /proc/stat");
+        return;
+    }
+
+    if (fgets(line, sizeof(line), file) == NULL)
+    {
+        fclose(file);
+        return;
+    }
+
+    sscanf(line,
+           "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+           &user2,
+           &nice2,
+           &system2,
+           &idle2,
+           &iowait2,
+           &irq2,
+           &softirq2,
+           &steal2);
+
+    fclose(file);
+
+    unsigned long long idleTotal1 =
+        idle1 + iowait1;
+
+    unsigned long long idleTotal2 =
+        idle2 + iowait2;
+
+    unsigned long long total1 =
+        user1 + nice1 + system1 +
+        idle1 + iowait1 +
+        irq1 + softirq1 + steal1;
+
+    unsigned long long total2 =
+        user2 + nice2 + system2 +
+        idle2 + iowait2 +
+        irq2 + softirq2 + steal2;
+
+    unsigned long long totalDiff =
+        total2 - total1;
+
+    unsigned long long idleDiff =
+        idleTotal2 - idleTotal1;
+
+    double cpuUsage = 0.0;
+
+    if (totalDiff != 0)
+    {
+        cpuUsage =
+            100.0 *
+            (double)(totalDiff - idleDiff) /
+            (double)totalDiff;
+    }
+
+    printf("CPU Usage : %.2f%%\n", cpuUsage);
+}
+
+/* ---------------------------------------------------------
+   MEMORY INFORMATION
+   --------------------------------------------------------- */
+
+void getMemoryUsage()
+{
+    FILE *file;
+    char line[BUFFER_SIZE];
+
+    unsigned long long totalMemory = 0;
+    unsigned long long freeMemory = 0;
+    unsigned long long availableMemory = 0;
+
+    file = fopen("/proc/meminfo", "r");
+
+    if (file == NULL)
+    {
+        perror("Unable to open /proc/meminfo");
+        return;
+    }
+
+    while (fgets(line, sizeof(line), file))
+    {
+        if (sscanf(line,
+                   "MemTotal: %llu kB",
+                   &totalMemory) == 1)
+        {
+            continue;
+        }
+
+        if (sscanf(line,
+                   "MemFree: %llu kB",
+                   &freeMemory) == 1)
+        {
+            continue;
+        }
+
+        if (sscanf(line,
+                   "MemAvailable: %llu kB",
+                   &availableMemory) == 1)
+        {
+            continue;
+        }
+    }
+
+    fclose(file);
+
+    if (totalMemory == 0)
+    {
+        printf("Memory information unavailable.\n");
+        return;
+    }
+
+    unsigned long long usedMemory =
+        totalMemory - availableMemory;
+
+    double usedPercentage =
+        (double)usedMemory /
+        (double)totalMemory *
+        100.0;
+
+    printf("Total Memory : %.2f GB\n",
+           totalMemory / 1024.0 / 1024.0);
+
+    printf("Used Memory  : %.2f GB\n",
+           usedMemory / 1024.0 / 1024.0);
+
+    printf("Free Memory  : %.2f GB\n",
+           freeMemory / 1024.0 / 1024.0);
+
+    printf("Memory Usage : %.2f%%\n",
+           usedPercentage);
+}
+
+/* ---------------------------------------------------------
+   DISK INFORMATION
+   --------------------------------------------------------- */
+
+void getDiskUsage()
+{
+    struct statvfs disk;
+
+    if (statvfs("/", &disk) != 0)
+    {
+        perror("Unable to obtain disk information");
+        return;
+    }
+
+    unsigned long long total =
+        (unsigned long long)disk.f_blocks *
+        disk.f_frsize;
+
+    unsigned long long free =
+        (unsigned long long)disk.f_bfree *
+        disk.f_frsize;
+
+    unsigned long long used =
+        total - free;
+
+    double percentage =
+        (double)used /
+        (double)total *
+        100.0;
+
+    printf("Total Disk   : %.2f GB\n",
+           total / 1024.0 / 1024.0 / 1024.0);
+
+    printf("Used Disk    : %.2f GB\n",
+           used / 1024.0 / 1024.0 / 1024.0);
+
+    printf("Free Disk    : %.2f GB\n",
+           free / 1024.0 / 1024.0 / 1024.0);
+
+    printf("Disk Usage   : %.2f%%\n",
+           percentage);
+}
+
+/* ---------------------------------------------------------
+   SYSTEM UPTIME
+   --------------------------------------------------------- */
+
+void getUptime()
+{
+    FILE *file;
+    double uptime;
+
+    file = fopen("/proc/uptime", "r");
+
+    if (file == NULL)
+    {
+        perror("Unable to open /proc/uptime");
+        return;
+    }
+
+    if (fscanf(file, "%lf", &uptime) != 1)
+    {
+        fclose(file);
+        return;
+    }
+
+    fclose(file);
+
+    long totalSeconds = (long)uptime;
+
+    long days =
+        totalSeconds / (24 * 3600);
+
+    totalSeconds %= (24 * 3600);
+
+    long hours =
+        totalSeconds / 3600;
+
+    totalSeconds %= 3600;
+
+    long minutes =
+        totalSeconds / 60;
+
+    long seconds =
+        totalSeconds % 60;
+
+    printf("System Uptime : %ld days, %ld hours, "
+           "%ld minutes, %ld seconds\n",
+           days,
+           hours,
+           minutes,
+           seconds);
+}
+
+/* ---------------------------------------------------------
+   HOSTNAME
+   --------------------------------------------------------- */
+
+void getHostname()
+{
+    char hostname[256];
+
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+    {
+        perror("gethostname");
+        return;
+    }
+
+    printf("Hostname      : %s\n", hostname);
+}
+
+/* ---------------------------------------------------------
+   FULL SYSTEM SUMMARY
+   --------------------------------------------------------- */
+
+void systemSummary()
+{
+    clearScreen();
+
+    printf("====================================================\n");
+    printf("             LINUX SYSTEM MONITOR\n");
+    printf("====================================================\n\n");
+
+    getHostname();
+
+    printf("\n---------------- CPU ----------------\n");
+    getCPUUsage();
+
+    printf("\n---------------- MEMORY -------------\n");
+    getMemoryUsage();
+
+    printf("\n---------------- DISK ---------------\n");
+    getDiskUsage();
+
+    printf("\n---------------- UPTIME -------------\n");
+    getUptime();
+
+    printf("\n====================================================\n");
+}
+
+/* ---------------------------------------------------------
+   PROCESS NAME
+   --------------------------------------------------------- */
+
+void getProcessName(pid_t pid, char *name, size_t size)
+{
+    char path[BUFFER_SIZE];
+    FILE *file;
+
+    snprintf(path,
+             sizeof(path),
+             "/proc/%d/comm",
+             pid);
+
+    file = fopen(path, "r");
+
+    if (file == NULL)
+    {
+        snprintf(name, size, "unknown");
+        return;
+    }
+
+    if (fgets(name, size, file) == NULL)
+    {
+        snprintf(name, size, "unknown");
+    }
+
+    name[strcspn(name, "\n")] = '\0';
+
+    fclose(file);
+}
+
+/* ---------------------------------------------------------
+   PROCESS LIST
+   --------------------------------------------------------- */
+
+void listProcesses()
+{
+    DIR *directory;
+    struct dirent *entry;
+
+    directory = opendir(PROC_PATH);
+
+    if (directory == NULL)
+    {
+        perror("Unable to open /proc");
+        return;
+    }
+
+    clearScreen();
+
+    printf("============================================================\n");
+    printf("                     RUNNING PROCESSES\n");
+    printf("============================================================\n");
+
+    printf("%-10s %-30s\n",
+           "PID",
+           "PROCESS");
+
+    printf("------------------------------------------------------------\n");
+
+    while ((entry = readdir(directory)) != NULL)
+    {
+        if (!isNumeric(entry->d_name))
+            continue;
+
+        pid_t pid =
+            (pid_t)atoi(entry->d_name);
+
+        char processName[256];
+
+        getProcessName(pid,
+                       processName,
+                       sizeof(processName));
+
+        printf("%-10d %-30s\n",
+               pid,
+               processName);
+    }
+
+    closedir(directory);
+}
+
+/* ---------------------------------------------------------
+   PROCESS INFORMATION
+   --------------------------------------------------------- */
+
+void processInformation()
+{
+    int pid;
+
+    char path[BUFFER_SIZE];
+    char line[BUFFER_SIZE];
+
+    printf("\nEnter PID: ");
+    scanf("%d", &pid);
+    getchar();
+
+    snprintf(path,
+             sizeof(path),
+             "/proc/%d/status",
+             pid);
+
+    FILE *file = fopen(path, "r");
+
+    if (file == NULL)
+    {
+        printf("Unable to access process %d.\n", pid);
+        printf("The process may not exist.\n");
+        return;
+    }
+
+    clearScreen();
+
+    printf("====================================================\n");
+    printf("              PROCESS INFORMATION\n");
+    printf("====================================================\n\n");
+
+    while (fgets(line, sizeof(line), file))
+    {
+        if (strncmp(line, "Name:", 5) == 0 ||
+            strncmp(line, "State:", 6) == 0 ||
+            strncmp(line, "Pid:", 4) == 0 ||
+            strncmp(line, "PPid:", 5) == 0 ||
+            strncmp(line, "Uid:", 4) == 0 ||
+            strncmp(line, "Gid:", 4) == 0 ||
+            strncmp(line, "VmSize:", 7) == 0 ||
+            strncmp(line, "VmRSS:", 6) == 0 ||
+            strncmp(line, "Threads:", 8) == 0)
+        {
+            printf("%s", line);
+        }
+    }
+
+    fclose(file);
+}
+
+/* ---------------------------------------------------------
+   TERMINATE PROCESS
+   --------------------------------------------------------- */
+
+void terminateProcess()
+{
+    int pid;
+    int signalChoice;
+
+    printf("\nEnter PID to terminate: ");
+    scanf("%d", &pid);
+    getchar();
+
+    printf("\nSelect signal:\n");
+    printf("1. SIGTERM - Graceful termination\n");
+    printf("2. SIGKILL - Force termination\n");
+
+    printf("Enter choice: ");
+    scanf("%d", &signalChoice);
+    getchar();
+
+    int signalNumber;
+
+    if (signalChoice == 1)
+    {
+        signalNumber = SIGTERM;
+    }
+    else if (signalChoice == 2)
+    {
+        signalNumber = SIGKILL;
+    }
+    else
+    {
+        printf("Invalid signal choice.\n");
+        return;
+    }
+
+    if (kill((pid_t)pid, signalNumber) == 0)
+    {
+        printf("Signal sent successfully to PID %d.\n",
+               pid);
+    }
+    else
+    {
+        perror("Unable to send signal");
+    }
+}
+
+/* ---------------------------------------------------------
+   CONTINUOUS MONITORING
+   --------------------------------------------------------- */
+
+void continuousMonitoring()
+{
+    int seconds;
+
+    printf("\nEnter refresh interval in seconds: ");
+    scanf("%d", &seconds);
+    getchar();
+
+    if (seconds <= 0)
+    {
+        printf("Invalid interval.\n");
+        return;
+    }
+
+    printf("\nContinuous monitoring started.\n");
+    printf("Press Ctrl+C to stop.\n");
+
+    while (1)
+    {
+        clearScreen();
+
+        printf("====================================================\n");
+        printf("            CONTINUOUS SYSTEM MONITOR\n");
+        printf("====================================================\n\n");
+
+        printf("---------------- CPU ----------------\n");
+        getCPUUsage();
+
+        printf("\n---------------- MEMORY -------------\n");
+        getMemoryUsage();
+
+        printf("\n---------------- DISK ---------------\n");
+        getDiskUsage();
+
+        printf("\n---------------- UPTIME -------------\n");
+        getUptime();
+
+        sleep(seconds);
+    }
+}
+
+/* ---------------------------------------------------------
+   HELP
+   --------------------------------------------------------- */
+
+void showHelp()
+{
+    clearScreen();
+
+    printf("====================================================\n");
+    printf("                 PROJECT INFORMATION\n");
+    printf("====================================================\n\n");
+
+    printf("Linux System Resource Monitor and Process Manager\n\n");
+
+    printf("This project demonstrates Linux system programming\n");
+    printf("using the /proc filesystem and POSIX APIs.\n\n");
+
+    printf("Main Components:\n");
+    printf("  * CPU monitoring\n");
+    printf("  * Memory monitoring\n");
+    printf("  * Disk monitoring\n");
+    printf("  * System uptime\n");
+    printf("  * Process listing\n");
+    printf("  * Process information\n");
+    printf("  * Process termination\n");
+    printf("  * Continuous monitoring\n\n");
+
+    printf("Linux Interfaces Used:\n");
+    printf("  /proc/stat\n");
+    printf("  /proc/meminfo\n");
+    printf("  /proc/uptime\n");
+    printf("  /proc/<PID>/status\n");
+    printf("  statvfs()\n");
+    printf("  kill()\n");
+    printf("  opendir()\n");
+    printf("  readdir()\n");
+    printf("  gethostname()\n");
+}
+
+/* ---------------------------------------------------------
+   MAIN MENU
+   --------------------------------------------------------- */
+
+void menu()
+{
+    printf("\n");
+    printf("====================================================\n");
+    printf("        LINUX SYSTEM RESOURCE MONITOR\n");
+    printf("====================================================\n");
+
+    printf("1. System Summary\n");
+    printf("2. CPU Usage\n");
+    printf("3. Memory Usage\n");
+    printf("4. Disk Usage\n");
+    printf("5. System Uptime\n");
+    printf("6. List Running Processes\n");
+    printf("7. Process Information\n");
+    printf("8. Terminate Process\n");
+    printf("9. Continuous Monitoring\n");
+    printf("10. Project Information\n");
+    printf("0. Exit\n");
+
+    printf("----------------------------------------------------\n");
+    printf("Enter choice: ");
+}
+
+/* ---------------------------------------------------------
+   MAIN
+   --------------------------------------------------------- */
+
+int main()
+{
+    int choice;
+
+    while (1)
+    {
+        menu();
+
+        if (scanf("%d", &choice) != 1)
+        {
+            printf("Invalid input.\n");
+
+            while (getchar() != '\n')
+                ;
+
+            continue;
+        }
+
+        getchar();
+
+        switch (choice)
+        {
+            case 1:
+                systemSummary();
+                pauseScreen();
+                break;
+
+            case 2:
+                clearScreen();
+
+                printf("============== CPU USAGE ==============\n\n");
+
+                getCPUUsage();
+
+                pauseScreen();
+                break;
+
+            case 3:
+                clearScreen();
+
+                printf("============ MEMORY USAGE =============\n\n");
+
+                getMemoryUsage();
+
+                pauseScreen();
+                break;
+
+            case 4:
+                clearScreen();
+
+                printf("============== DISK USAGE =============\n\n");
+
+                getDiskUsage();
+
+                pauseScreen();
+                break;
+
+            case 5:
+                clearScreen();
+
+                printf("============= SYSTEM UPTIME ============\n\n");
+
+                getUptime();
+
+                pauseScreen();
+                break;
+
+            case 6:
+                listProcesses();
+
+                pauseScreen();
+                break;
+
+            case 7:
+                processInformation();
+
+                pauseScreen();
+                break;
+
+            case 8:
+                terminateProcess();
+
+                pauseScreen();
+                break;
+
+            case 9:
+                continuousMonitoring();
+                break;
+
+            case 10:
+                showHelp();
+
+                pauseScreen();
+                break;
+
+            case 0:
+                printf("\nExiting program...\n");
+                return 0;
+
+            default:
+                printf("\nInvalid choice. Try again.\n");
+        }
+    }
+
+    return 0;
+}
